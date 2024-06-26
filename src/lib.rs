@@ -1,119 +1,180 @@
-/// A builder that will be used to create a computational graph.
-struct Builder;
+use std::cell::RefCell;
+use std::fmt::{self, Debug, Formatter};
+use std::rc::Rc;
+
+type NodeId = usize;
 
 /// A node in the computational graph.
-struct Node;
+pub struct Node {
+    value: RefCell<Option<u32>>,
+    is_hint: bool,
+    parents: Vec<NodeId>,
+    operation: RefCell<Option<Box<dyn Fn(u32, u32) -> u32>>>,
+}
+
+impl Node {
+    pub fn new(value: Option<u32>, is_hint: bool, parents: Vec<NodeId>) -> Self {
+        Self {
+            value: RefCell::new(value),
+            is_hint,
+            parents,
+            operation: RefCell::new(None),
+        }
+    }
+}
+
+impl Debug for Node {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Node")
+            .field("value", &self.value)
+            .field("is_hint", &self.is_hint)
+            .field("parents", &self.parents)
+            .finish()
+    }
+}
+
+/// A builder that will be used to create a computational graph.
+pub struct Builder {
+    nodes: Vec<Rc<Node>>,
+    constraints: Vec<(NodeId, NodeId)>,
+    node_counter: NodeId,
+}
 
 impl Builder {
     /// Creates a new builder.
     pub fn new() -> Self {
-        todo!()
+        Self {
+            nodes: Vec::new(),
+            constraints: Vec::new(),
+            node_counter: 0,
+        }
+    }
+
+    fn create_node(&mut self, value: Option<u32>, is_hint: bool, parents: Vec<NodeId>) -> NodeId {
+        let node = Rc::new(Node::new(value, is_hint, parents));
+        self.nodes.push(node);
+        self.node_counter += 1;
+        self.node_counter - 1
     }
 
     /// Initializes a node in the graph.
-    pub fn init(&mut self) -> Node {
-        todo!()
+    pub fn init(&mut self) -> NodeId {
+        self.create_node(None, false, Vec::new())
     }
 
     /// Initializes a node in a graph, set to a constant value.
-    pub fn constant(&mut self, value: u32) -> Node {
-        todo!()
+    pub fn constant(&mut self, value: u32) -> NodeId {
+        self.create_node(Some(value), false, Vec::new())
+    }
+
+    /// Adds an operation between 2 nodes in the graph, returning a new node.
+    fn add_operation(&mut self, a: &NodeId, b: &NodeId, operation: Box<dyn Fn(u32, u32) -> u32>) -> NodeId {
+        let node_id = self.create_node(None, false, vec![*a, *b]);
+        *self.nodes[node_id].operation.borrow_mut() = Some(operation);
+        node_id
     }
 
     /// Adds 2 nodes in the graph, returning a new node.
-    pub fn add(&mut self, a: &Node, b: &Node) -> Node {
-        todo!()
+    pub fn add(&mut self, a: &NodeId, b: &NodeId) -> NodeId {
+        self.add_operation(a, b, Box::new(|a, b| a + b))
     }
 
     /// Multiplies 2 nodes in the graph, returning a new node.
-    pub fn mul(&mut self, a: &Node, b: &Node) -> Node {
-        todo!()
+    pub fn mul(&mut self, a: &NodeId, b: &NodeId) -> NodeId {
+        self.add_operation(a, b, Box::new(|a, b| a * b))
     }
 
     /// Asserts that 2 nodes are equal.
-    pub fn assert_equal(&mut self, a: Node, b: Node) {
-        todo!()
+    pub fn assert_equal(&mut self, a: NodeId, b: NodeId) {
+        self.constraints.push((a, b));
+    }
+
+    fn fill_node(&self, node_id: NodeId) -> bool {
+        let node = &self.nodes[node_id];
+        if node.value.borrow().is_none() {
+            let parent_values: Vec<Option<u32>> = node
+                .parents
+                .iter()
+                .map(|&id| *self.nodes[id].value.borrow())
+                .collect();
+
+            if parent_values.iter().all(|v| v.is_some()) {
+                let parent_values: Vec<u32> = parent_values.into_iter().map(|v| v.unwrap()).collect();
+                if let Some(operation) = &*node.operation.borrow() {
+                    let result = match parent_values.len() {
+                        2 => operation(parent_values[0], parent_values[1]),
+                        1 => operation(parent_values[0], parent_values[0]),
+                        _ => panic!("Unsupported number of parent values"),
+                    };
+                    *node.value.borrow_mut() = Some(result);
+                    println!("Filling node {} with value {}", node_id, result);
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Fills in all the nodes of the graph based on some inputs.
-    pub fn fill_nodes(&mut self, inputs: Vec<Node>) {
-        todo!()
+    pub fn fill_nodes(&mut self, inputs: Vec<Option<u32>>) {
+        for (node_id, value) in inputs.iter().enumerate() {
+            if let Some(value) = value {
+                println!("Setting input node {} to value {}", node_id, value);
+                *self.nodes[node_id].value.borrow_mut() = Some(*value);
+            }
+        }
+
+        loop {
+            let mut filled_any = false;
+            for node_id in 0..self.nodes.len() {
+                if self.fill_node(node_id) {
+                    filled_any = true;
+                }
+            }
+            if !filled_any {
+                break;
+            }
+        }
     }
 
     /// Given a graph that has `fill_nodes` already called on it
     /// checks that all the constraints hold.
-    pub fn check_constraints(&mut self) -> bool {
-        todo!()
+    pub fn check_constraints(&self) -> bool {
+        for (a, b) in &self.constraints {
+            let a_value = self.nodes[*a].value.borrow();
+            let b_value = self.nodes[*b].value.borrow();
+            println!(
+                "Checking constraint: node {} value {} == node {} value {}",
+                a,
+                a_value.unwrap(),
+                b,
+                b_value.unwrap()
+            );
+            if *a_value != *b_value {
+                return false;
+            }
+        }
+        true
     }
 
     /// An API for hinting values that allows you to perform operations
     /// like division or computing square roots.
-    pub fn hint() -> Node {
-        todo!()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Example 1: f(x) = x^2 + x + 5
-    #[test]
-    fn example_1() {
-        let mut builder = Builder::new();
-        let x = builder.init();
-        let x_squared = builder.mul(&x, &x);
-        let five = builder.constant(5);
-        let x_squared_plus_5 = builder.add(&x_squared, &five);
-        let y = builder.add(&x_squared_plus_5, &x);
-
-        builder.fill_nodes(vec![x, y]);
-        builder.check_constraints();
-    }
-
-    // Example 2: f(a) = (a+1) / 8
-    //
-    // function f(a):
-    //     b = a + 1
-    //     c = b / 8
-    //     return c
-    #[test]
-    fn example_2() {
-        let mut builder = Builder::new();
-        let a = builder.init();
-        let one = builder.constant(1);
-        let b = builder.add(&a, &one);
-
-        // TODO: determine an API for hint where it can depend
-        // on the computed value of b and a user can specify an
-        // arbitrary function for c based on b.
-        let c = Builder::hint();
-        let eight = builder.constant(8);
-        let c_times_8 = builder.mul(&c, &eight);
-        builder.assert_equal(b, c_times_8);
-
-        // builder.fill_nodes(...);
-        builder.check_constraints();
-    }
-
-    // Example 3: f(x) = sqrt(x+7)
-    //
-    // Assume that x+7 is a perfect square (so x = 2 or 9, etc.).
-    #[test]
-    fn example_3() {
-        let mut builder = Builder::new();
-        let x = builder.init();
-        let seven = builder.constant(7);
-        let x_plus_7 = builder.add(&x, &seven);
-
-        // TODO: determine an API for hint where it can depend
-        // on the computed value of x+7 and a user can specify
-        // that the value should be the sqrt.
-        let sqrt_x_plus_7 = Builder::hint();
-        let computed_sq = builder.mul(&sqrt_x_plus_7, &sqrt_x_plus_7);
-        builder.assert_equal(computed_sq, x_plus_7);
-
-        // builder.fill_nodes(...);
-        builder.check_constraints();
+    pub fn hint<F>(&mut self, value_func: F, depends_on: Vec<NodeId>) -> NodeId
+    where
+        F: 'static + Fn(&[u32]) -> u32,
+    {
+        let node_id = self.create_node(None, true, depends_on.clone());
+        let nodes = self.nodes.clone();
+        {
+            let mut operation = self.nodes[node_id].operation.borrow_mut();
+            *operation = Some(Box::new(move |_, _| {
+                let parent_values: Vec<u32> = depends_on
+                    .iter()
+                    .map(|&id| nodes[id].value.borrow().expect("Parent value should be filled"))
+                    .collect();
+                value_func(&parent_values)
+            }));
+        }
+        node_id
     }
 }
